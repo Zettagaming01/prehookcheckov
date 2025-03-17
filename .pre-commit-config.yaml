@@ -9,7 +9,7 @@ repos:
 
 - repo: local
   hooks:
-    - id: checkov-local
+    - id: checkov-custom
       name: Checkov Custom Rules
       entry: checkov
       language: system
@@ -20,5 +20,11 @@ repos:
         - custom_rules
         - --framework
         - terraform
+        - --check
+        - CKV_AZURE_STORAGE_1
+        - --check
+        - CKV_AZURE_STORAGE_2
+        - --skip-check
+        - CKV_TF-1
       types: [terraform]
       pass_filenames: false
