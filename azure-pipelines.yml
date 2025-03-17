@@ -1,0 +1,202 @@
+trigger:
+  branches:
+    include:
+    - main
+
+variables:
+- group: terraform-storage-account
+- name: pythonVersion
+  value: '3.9'
+
+stages:
+- stage: Validate
+  displayName: Validate
+  jobs:
+  - job: validate
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    # Setup Python and Checkov
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+        addToPath: true
+      displayName: 'Setup Python $(pythonVersion)'
+
+    - bash: |
+        python -m pip install --upgrade pip
+        pip install checkov
+      displayName: 'Install Checkov'
+
+    # Azure Key Vault
+    - task: AzureKeyVault@1
+      inputs:
+        ConnectedServiceName: $(service_name)
+        keyVaultName: $(key_vault_name)
+        secretsFilter: '*'
+        runAsPreJob: false
+
+    # Init
+    - task: TerraformCLI@0
+      displayName: Initialize Terraform
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+      inputs:
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+        commandOptions: '-backend-config=storage_account_name=$(storageaccount) -backend-config=container_name=$(container-name) -backend-config=key=$(key)'
+        backendType: 'selfConfigured'
+
+    # Validate
+    - task: TerraformCLI@0
+      displayName: Validate Config
+      inputs:
+        command: 'validate'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+    # Run Custom Checkov Rules
+    - bash: |
+        export PYTHONPATH=$PYTHONPATH:$(System.DefaultWorkingDirectory)
+        checkov -d . --external-checks-dir custom_rules --framework terraform -o junitxml > $(System.DefaultWorkingDirectory)/Checkov-Custom-Rules-Report.xml
+      displayName: 'Run Custom Storage Account Rules'
+      name: 'checkov_custom_rules'
+      workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+    # Publish Custom Rules Results
+    - task: PublishTestResults@2
+      displayName: Publish Custom Rules Test Results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/Checkov-Custom-Rules-Report.xml'
+        searchFolder: '$(System.DefaultWorkingDirectory)'
+        mergeTestResults: false
+        testRunTitle: Storage Account Security Checks
+        failTaskOnFailedTests: false
+        publishRunAttachments: true
+
+- stage: Plan
+  displayName: Plan
+  jobs:
+  - job: plan
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    # Setup Python and Checkov
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+        addToPath: true
+      displayName: 'Setup Python $(pythonVersion)'
+
+    - bash: |
+        python -m pip install --upgrade pip
+        pip install checkov
+      displayName: 'Install Checkov'
+
+    # Azure Key Vault
+    - task: AzureKeyVault@1
+      inputs:
+        ConnectedServiceName: $(service_name)
+        keyVaultName: $(key_vault_name)
+        secretsFilter: '*'
+        runAsPreJob: false
+
+    # Init
+    - task: TerraformCLI@0
+      displayName: Initialize Terraform
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+      inputs:
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+        commandOptions: '-backend-config=storage_account_name=$(storageaccount) -backend-config=container_name=$(container-name) -backend-config=key=$(key)'
+        backendType: 'selfConfigured'
+
+    # Plan
+    - task: TerraformCLI@0
+      displayName: Plan Terraform Deployment
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+        ARM_CLIENT_ID: $(az-client-id)
+        ARM_CLIENT_SECRET: $(az-client-secret)
+        ARM_SUBSCRIPTION_ID: $(az-subscription)
+        ARM_TENANT_ID: $(az-tenant)
+      inputs:
+        command: 'plan'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+        commandOptions: '-out=$(System.DefaultWorkingDirectory)/main.tfplan'
+        publishPlanResults: 'Terraform Plan'
+
+    # Verify plan with Checkov
+    - bash: |
+        export PYTHONPATH=$PYTHONPATH:$(System.DefaultWorkingDirectory)
+        terraform show -json main.tfplan > main.json
+        checkov -f main.json --external-checks-dir custom_rules --framework terraform -o junitxml > $(System.DefaultWorkingDirectory)/Checkov-Plan-Report.xml
+      displayName: 'Verify plan with Checkov'
+      name: 'checkov_plan_check'
+      workingDirectory: '$(System.DefaultWorkingDirectory)'
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+        ARM_CLIENT_ID: $(az-client-id)
+        ARM_CLIENT_SECRET: $(az-client-secret)
+        ARM_SUBSCRIPTION_ID: $(az-subscription)
+        ARM_TENANT_ID: $(az-tenant)
+
+    # Publish plan check results
+    - task: PublishTestResults@2
+      displayName: Publish Plan Check Results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/Checkov-Plan-Report.xml'
+        searchFolder: '$(System.DefaultWorkingDirectory)'
+        mergeTestResults: false
+        testRunTitle: Storage Account Plan Check
+        failTaskOnFailedTests: false
+        publishRunAttachments: true
+
+- stage: Apply
+  displayName: Apply
+  jobs:
+  - job: apply
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    # Azure Key Vault
+    - task: AzureKeyVault@1
+      inputs:
+        ConnectedServiceName: $(service_name)
+        keyVaultName: $(key_vault_name)
+        secretsFilter: '*'
+        runAsPreJob: false
+
+    # Init
+    - task: TerraformCLI@0
+      displayName: Initialize Terraform
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+      inputs:
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+        commandOptions: '-backend-config=storage_account_name=$(storageaccount) -backend-config=container_name=$(container-name) -backend-config=key=$(key)'
+        backendType: 'selfConfigured'
+
+    # Apply
+    - task: TerraformCLI@0
+      displayName: Apply Terraform Deployment
+      env:
+        ARM_SAS_TOKEN: $(sas-token)
+        ARM_CLIENT_ID: $(az-client-id)
+        ARM_CLIENT_SECRET: $(az-client-secret)
+        ARM_SUBSCRIPTION_ID: $(az-subscription)
+        ARM_TENANT_ID: $(az-tenant)
+      inputs:
+        command: 'apply'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+        commandOptions: '-auto-approve'
+
+    # Install pre-commit
+    - bash: |
+        pre-commit install
+      displayName: 'Install pre-commit'

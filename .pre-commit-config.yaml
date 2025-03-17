@@ -1,0 +1,30 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.5.0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+    - id: check-added-large-files
+
+- repo: local
+  hooks:
+    - id: checkov-custom
+      name: Checkov Custom Rules
+      entry: checkov
+      language: system
+      args:
+        - -d
+        - .
+        - --external-checks-dir
+        - custom_rules
+        - --framework
+        - terraform
+        - --check
+        - CKV_AZURE_STORAGE_1
+        - --check
+        - CKV_AZURE_STORAGE_2
+        - --skip-check
+        - CKV_TF-1
+      types: [terraform]
+      pass_filenames: false
